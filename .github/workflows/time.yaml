@@ -1,0 +1,145 @@
+name: eks-time
+on:
+  push:
+    paths:
+      - '.github/workflows/time.yaml'
+      - 'clusters/gorilla-logic/time.tfvars'
+    branches: [ "main" ]
+  workflow_dispatch:
+env:
+  CLUSTER_NAME: "time"
+  DNS_DOMAIN: "minube.cr"
+  AWS_REGION: "us-east-1"
+  AWS_ACCOUNT: ${{ secrets.AWS_ACCOUNT }}
+jobs:
+  code-checkout:
+    runs-on: ec2-infra
+    steps:
+      - name: "Checkout Repository Code"
+        uses: actions/checkout@v3
+      - run: echo "Repository has been cloned"
+  check-versions:
+    runs-on: ec2-infra
+    needs: code-checkout
+    steps:
+      - name: "Check Toolbox versions"
+        run: |
+          terraform version
+          jq --version
+          kubectl version --short --client
+  terraform-aws-validate:
+    runs-on: ec2-infra
+    needs: [code-checkout, check-versions]
+    steps:
+      - name: "Terraform AWS Validate"
+        run: |
+          cd terraform/aws
+          terraform init
+          terraform validate
+          terraform refresh --var-file="../../clusters/gorilla-logic/${{ env.CLUSTER_NAME }}.tfvars" \
+          --var="cluster_name=${{ env.CLUSTER_NAME }}" \
+          --var="region=${{ env.AWS_REGION }}" \
+          --var="ext_dns_name=${{ env.DNS_DOMAIN }}"
+          terraform plan --var-file="../../clusters/gorilla-logic/${{ env.CLUSTER_NAME }}.tfvars" \
+          --var="cluster_name=${{ env.CLUSTER_NAME }}" \
+          --var="region=${{ env.AWS_REGION }}" \
+          --var="ext_dns_name=${{ env.DNS_DOMAIN }}"
+  terraform-aws-execute:
+    runs-on: ec2-infra
+    needs: terraform-aws-validate
+    steps:
+      - name: "Terraform AWS Execute"
+        run: |
+          cd terraform/aws
+          terraform init
+          terraform apply --auto-approve --var-file="../../clusters/gorilla-logic/${{ env.CLUSTER_NAME }}.tfvars" \
+          --var="cluster_name=${{ env.CLUSTER_NAME }}" \
+          --var="region=${{ env.AWS_REGION }}" \
+          --var="ext_dns_name=${{ env.DNS_DOMAIN }}"
+  terraform-cf-validate:
+    runs-on: ec2-infra
+    needs: terraform-aws-execute
+    steps:
+      - name: "Terraform Cloudflare Validate"
+        run: |
+          cd terraform/cloudflare
+          terraform init
+          terraform validate
+          terraform refresh \
+          --var="region=${{ env.AWS_REGION }}" \
+          --var="cluster_name=${{ env.CLUSTER_NAME }}" \
+          --var="ext_dns_name=${{ env.DNS_DOMAIN }}" \
+          --var="cloudflare_email=${{ secrets.CLOUDFLARE_EMAIL }}" \
+          --var="cloudflare_api_key=${{ secrets.CLOUDFLARE_API_KEY }}"
+          terraform plan \
+          --var="region=${{ env.AWS_REGION }}" \
+          --var="cluster_name=${{ env.CLUSTER_NAME }}" \
+          --var="ext_dns_name=${{ env.DNS_DOMAIN }}" \
+          --var="cloudflare_email=${{ secrets.CLOUDFLARE_EMAIL }}" \
+          --var="cloudflare_api_key=${{ secrets.CLOUDFLARE_API_KEY }}"
+  terraform-cf-execute:
+    runs-on: ec2-infra
+    needs: terraform-cf-validate
+    steps:
+      - name: "Terraform Cloudflare Execute"
+        run: |
+          cd terraform/cloudflare
+          terraform init
+          terraform apply --auto-approve \
+          --var="region=${{ env.AWS_REGION }}" \
+          --var="cluster_name=${{ env.CLUSTER_NAME }}" \
+          --var="ext_dns_name=${{ env.DNS_DOMAIN }}" \
+          --var="cloudflare_email=${{ secrets.CLOUDFLARE_EMAIL }}" \
+          --var="cloudflare_api_key=${{ secrets.CLOUDFLARE_API_KEY }}"
+  update-kubeconfig:
+    runs-on: ec2-infra
+    needs: terraform-aws-execute
+    steps:
+      - name: "Update KubeConfig"
+        run: |
+          aws eks update-kubeconfig --name ${{ env.CLUSTER_NAME }} --region=${{ env.AWS_REGION }}
+  patch-configmap-aws-auth:
+    runs-on: ec2-infra
+    needs: update-kubeconfig
+    steps:
+      - name: "Patch AWS User"
+        run: |
+          echo "data:" > mapuser.yaml
+          echo "  mapUsers: |" >> mapuser.yaml
+          echo "    - userarn: arn:aws:iam::$AWS_ACCOUNT:user/enzo" >> mapuser.yaml
+          echo "      username: enzo" >> mapuser.yaml
+          echo "      groups:" >> mapuser.yaml
+          echo "      - system:masters" >> mapuser.yaml
+          kubectl patch configmap/aws-auth -n kube-system --type merge --patch-file='mapuser.yaml'
+  addons-setup:
+    runs-on: ec2-infra
+    needs: update-kubeconfig
+    steps:
+      - name: "K8s Add-ons Installation"
+        run: |
+          cd k8s/add-ons
+          echo "############### Metrics Server"
+          kubectl apply -f metrics-server/install.yaml
+          echo "############### NGINX Ingress Controller"
+          kubectl apply -f nginx-ingress/aws.yaml
+          kubectl annotate service ingress-nginx-controller -n ingress-nginx \
+          external-dns.alpha.kubernetes.io/hostname='nlb.${{ env.CLUSTER_NAME }}.${{ env.DNS_DOMAIN }}' --overwrite
+          echo "############### Cert-Manager"
+          kubectl apply -f cert-manager/install.yaml
+          kubectl apply -f cert-manager/issuers.yaml
+          echo "############### Cloudflare Origin CA Issuer"
+          kubectl apply -f origin-ca-issuer/crds
+          kubectl apply -f origin-ca-issuer/rbac
+          kubectl apply -f origin-ca-issuer/manifests
+          echo "############### External-DNS"
+          kubectl apply -f external-dns/namespace.yaml
+          kubectl create configmap external-dns -n externaldns \
+          --from-literal=domain=${{ env.CLUSTER_NAME }}.${{ env.DNS_DOMAIN }} -o yaml --dry-run=client | kubectl apply -f -
+          kubectl apply -f external-dns/externaldns.yaml
+          ROLE_ARN=$(aws iam get-role --role-name eks-${{ env.CLUSTER_NAME }}-cluster --query Role.Arn --output text)
+          kubectl patch serviceaccount "external-dns" -n externaldns --patch \
+          "{\"metadata\": { \"annotations\": { \"eks.amazonaws.com/role-arn\": \"$ROLE_ARN\" }}}"
+          echo "############### ArgoCD"
+          kubectl apply -f argocd/ns.yaml
+          kubectl apply -f argocd/install.yaml -n argocd
+          kubectl apply -f argocd/ingress.yaml -n argocd
