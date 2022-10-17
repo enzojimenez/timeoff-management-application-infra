@@ -34,10 +34,10 @@ spec:
             - name: GODADDY_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: external-dns
+                  name: external-dns-godaddy
                   key: GODADDY_API_KEY
             - name: GODADDY_API_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: external-dns
+                  name: external-dns-godaddy
                   key: GODADDY_API_SECRET

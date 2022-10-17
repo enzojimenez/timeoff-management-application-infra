@@ -135,7 +135,7 @@ jobs:
           kubectl apply -f external-dns/namespace.yaml
           kubectl create configmap external-dns -n externaldns \
           --from-literal=domain=${{ env.CLUSTER_NAME }}.${{ env.DNS_DOMAIN }} -o yaml --dry-run=client | kubectl apply -f -
-          kubectl create secret opaque external-dns -n externaldns \
+          kubectl create secret generic external-dns-godaddy -n externaldns \
           --from-literal=GODADDY_API_KEY=${{ secrets.GODADDY_API_KEY }} \
           --from-literal=GODADDY_API_SECRET=${{ secrets.GODADDY_API_SECRET }} \
           -o yaml --dry-run=client | kubectl apply -f -
