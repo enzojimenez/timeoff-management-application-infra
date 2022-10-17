@@ -4,12 +4,16 @@ metadata:
   name: argocd-server
   namespace: argocd
   annotations:
-    # nginx.ingress.kubernetes.io/rewrite-target: /
-    external-dns.alpha.kubernetes.io/hostname: argo.time.minube.cr
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+    external-dns.alpha.kubernetes.io/hostname: argo.time.in10minutes.dev
 spec:
   ingressClassName: nginx
+  tls:
+  - hosts:
+    - argo.time.in10minutes.dev
+    secretName: argo-time-in10minutes-dev-tls
   rules:
-  - host: "argo.time.minube.cr"
+  - host: argo.time.in10minutes.dev
     http:
       paths:
       - pathType: Prefix

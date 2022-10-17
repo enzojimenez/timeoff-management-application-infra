@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: external-dns
+  namespace: externaldns
+  labels:
+    app.kubernetes.io/name: external-dns
+spec:
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: external-dns
+  template:
+    metadata:
+      namespace: externaldns
+      labels:
+        app.kubernetes.io/name: external-dns
+    spec:
+      serviceAccountName: external-dns
+      containers:
+        - name: external-dns
+          image: k8s.gcr.io/external-dns/external-dns:v0.11.0
+          args:
+            - --source=service
+            - --source=ingress
+            - --domain-filter=$(DNS_DOMAIN)
+            - --provider=aws
+            - --policy=upsert-only
+            - --aws-zone-type=public
+            - --registry=txt
+            - --txt-owner-id=external-dns
+          env:
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+            - name: DNS_DOMAIN
+              valueFrom:
+                configMapKeyRef:
+                  name: external-dns
+                  key: domain
+            - name: AWS_SHARED_CREDENTIALS_FILE
+              value: /.aws/credentials
+          volumeMounts:
+            - name: aws-credentials
+              mountPath: /.aws
+              readOnly: true
+      volumes:
+        - name: aws-credentials
+          secret:
+            secretName: external-dns

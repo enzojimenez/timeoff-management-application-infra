@@ -126,7 +126,7 @@ jobs:
           external-dns.alpha.kubernetes.io/hostname='nlb.${{ env.CLUSTER_NAME }}.${{ env.DNS_DOMAIN }}' --overwrite
           echo "############### Cert-Manager"
           kubectl apply -f cert-manager/install.yaml
-          kubectl apply -f cert-manager/issuers.yaml
+          kubectl apply -f cert-manager/cluster-issuers.yaml
           echo "############### Cloudflare Origin CA Issuer"
           kubectl apply -f origin-ca-issuer/crds
           kubectl apply -f origin-ca-issuer/rbac
@@ -135,7 +135,13 @@ jobs:
           kubectl apply -f external-dns/namespace.yaml
           kubectl create configmap external-dns -n externaldns \
           --from-literal=domain=${{ env.CLUSTER_NAME }}.${{ env.DNS_DOMAIN }} -o yaml --dry-run=client | kubectl apply -f -
+          kubectl create secret opaque external-dns -n externaldns \
+          --from-literal=GODADDY_API_KEY=${{ secrets.GODADDY_API_KEY }} \
+          --from-literal=GODADDY_API_SECRET=${{ secrets.GODADDY_API_SECRET }} \
+          -o yaml --dry-run=client | kubectl apply -f -
           kubectl apply -f external-dns/externaldns.yaml
+          kubectl apply -f external-dns/route53.yaml
+          kubectl apply -f external-dns/godaddy.yaml
           ROLE_ARN=$(aws iam get-role --role-name eks-${{ env.CLUSTER_NAME }}-cluster --query Role.Arn --output text)
           kubectl patch serviceaccount "external-dns" -n externaldns --patch \
           "{\"metadata\": { \"annotations\": { \"eks.amazonaws.com/role-arn\": \"$ROLE_ARN\" }}}"
@@ -143,3 +149,4 @@ jobs:
           kubectl apply -f argocd/ns.yaml
           kubectl apply -f argocd/install.yaml -n argocd
           kubectl apply -f argocd/ingress.yaml -n argocd
+          kubectl apply -f argocd/issuer.yaml -n argocd
